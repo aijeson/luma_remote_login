@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Luma 远程登录授权 Demo</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+    body { margin: 0; color: #263247; background: #f4f7fb; }
+    .shell { max-width: 1360px; margin: 0 auto; padding: 20px; }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+    h1 { font-size: 23px; margin: 6px 0; }
+    p { line-height: 1.6; margin: 6px 0 14px; }
+    .subtle { color: #627086; font-size: 13px; }
+    .panel { background: white; border: 1px solid #dfe6f0; border-radius: 12px; padding: 16px; box-shadow: 0 2px 10px #14203d07; }
+    .toolbar { margin: 14px 0; display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
+    input[type=password] { width: 320px; max-width: 95%; border: 1px solid #cbd5e1; padding: 11px; border-radius: 8px; }
+    button { background: #2d59af; color: white; border: none; border-radius: 8px; padding: 10px 14px; font-weight: 600; cursor: pointer; }
+    button.secondary { background: #64748b; }
+    button.danger { background: #b33939; }
+    button:hover { filter: brightness(.93); }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    .cols { display: grid; grid-template-columns: minmax(580px, 2.1fr) minmax(260px, .9fr); gap: 14px; }
+    iframe { display: block; width: 100%; height: min(76vh, 780px); min-height: 540px; border: 1px solid #dce3ed; border-radius: 8px; background: #222; }
+    .status { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace,SFMono-Regular,Consolas,monospace; background: #f3f6fc; border-radius: 8px; font-size: 12px; padding: 12px; }
+    label { display: block; margin-bottom: 12px; line-height: 1.6; }
+    #message { margin-bottom: 10px; color: #35577a; min-height: 2em; overflow-wrap: anywhere; }
+    .notice { padding: 10px 12px; border-left: 4px solid #e0a03a; background: #fff8eb; font-size: 13px; }
+    @media(max-width: 950px){ .cols { grid-template-columns: 1fr; } iframe { height: 60vh; min-height: 420px; } }
+  </style>
+</head>
+<body>
+<main class="shell">
+  <header>
+    <div>
+      <h1>Luma 登录授权 · Linux 远程浏览器 Demo</h1>
+      <p class="subtle">真实浏览器运行在 Linux 容器内。请只用你本人拥有或获得明确授权的 Luma 账号测试。</p>
+    </div>
+    <span class="subtle">仅限经 SSH 隧道访问的单用户演示</span>
+  </header>
+  <div class="toolbar panel">
+    <input id="token" type="password" placeholder="粘贴服务器 .env 中的 APP_TOKEN" autocomplete="off" aria-label="APP_TOKEN">
+    <button type="button" id="statusBtn">查看状态</button>
+    <button type="button" class="secondary" id="verifyBtn">验证已保存会话</button>
+    <button type="button" class="danger" id="disconnectBtn">删除本地授权 / 清空浏览器</button>
+  </div>
+  <div class="cols">
+    <section class="panel">
+      <h2 style="font-size:17px;margin-top:0">① 在下方远程浏览器中登录 Luma</h2>
+      <p class="subtle">推荐邮箱验证码方式。所有输入发生在 Luma 网站页面，而不是这个 Demo 的表单里。</p>
+      <iframe id="remoteBrowser" title="Linux remote Chromium browser" referrerpolicy="no-referrer"></iframe>
+    </section>
+    <aside class="panel">
+      <h2 style="font-size:17px;margin-top:0">② 确认授权并保存</h2>
+      <p>完成登录后，确认浏览器已进入 Luma 登录后页面。我们仅保存 <strong>luma.com</strong> 域名范围的会话状态，加密写入本机，不在 API 返回 Cookie。</p>
+      <label><input id="consent" type="checkbox"> 我确认自己拥有此账号或已获授权，并同意将当前登录会话保存到这个 Linux 演示服务器供后续访问测试。</label>
+      <button type="button" id="saveBtn">保存加密登录会话</button>
+      <h2 style="font-size:17px;margin-top:24px">③ 状态和验证结果</h2>
+      <div id="message" aria-live="polite">请输入 APP_TOKEN，然后点击「查看状态」。</div>
+      <div id="results" class="status">尚未检查</div>
+      <div class="notice" style="margin-top:20px">
+        <strong>实验限制：</strong> 访问 /home、看到 Cookie 或未看到“Sign In”按钮，都不能单独作为登录成功的确定证据。最后请人工核对页面是否真的展示登录用户信息。
+      </div>
+    </aside>
+  </div>
+</main>
+<script>
+(() => {
+  'use strict';
+  const host = location.hostname;
+  // The two ports are intentionally accessible only through SSH forwarding.
+  document.getElementById('remoteBrowser').src = `${location.protocol}//${host}:6080/vnc.html?autoconnect=1&resize=scale&path=websockify`;
+  const $ = id => document.getElementById(id);
+  const message = text => { $('message').textContent = text; };
+  const show = data => { $('results').textContent = JSON.stringify(data, null, 2); };
+  async function api(path, method='GET') {
+    const token = $('token').value.trim();
+    if (!token) throw new Error('请先填写 APP_TOKEN（在服务器 .env 文件内）。');
+    const response = await fetch(path, { method, headers: { 'X-Admin-Token': token }, cache: 'no-store' });
+    let body = {};
+    try { body = await response.json(); } catch (_) {}
+    if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
+    return body;
+  }
+  async function execute(path, method='GET') {
+    message('正在请求…');
+    try { const data = await api(path, method); show(data); message('操作完成。'); }
+    catch (e) { message(`错误：${e.message}`); }
+  }
+  $('statusBtn').addEventListener('click', () => execute('/api/status'));
+  $('verifyBtn').addEventListener('click', () => execute('/api/verify', 'POST'));
+  $('saveBtn').addEventListener('click', () => {
+    if (!$('consent').checked) { message('请先确认账号所有权和授权范围。'); return; }
+    execute('/api/save', 'POST');
+  });
+  $('disconnectBtn').addEventListener('click', () => {
+    if (confirm('确认删除本机保存的 Luma 会话并清空远程浏览器吗？注意，这不会撤销 Luma 网站端会话。'))
+      execute('/api/disconnect', 'POST');
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+services:
+  app:
+    build: .
+    init: true
+    shm_size: '1gb'
+    environment:
+      FERNET_KEY: ${FERNET_KEY:?Set FERNET_KEY in .env first}
+      APP_TOKEN: ${APP_TOKEN:?Set APP_TOKEN in .env first}
+    # These host ports bind ONLY to loopback. To use from a remote PC, SSH-tunnel both.
+    ports:
+      - '127.0.0.1:8000:8000'
+      - '127.0.0.1:6080:6080'
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 20s
+      timeout: 8s
+      retries: 3
+      start_period: 90s
