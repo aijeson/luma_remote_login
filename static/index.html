@@ -36,7 +36,7 @@
       <h1>Luma 登录授权 · Linux 远程浏览器 Demo</h1>
       <p class="subtle">真实浏览器运行在 Linux 容器内。请只用你本人拥有或获得明确授权的 Luma 账号测试。</p>
     </div>
-    <span class="subtle">仅限经 SSH 隧道访问的单用户演示</span>
+    <span class="subtle">仅限已获授权的单操作员测试（非多用户产品）</span>
   </header>
   <div class="toolbar panel">
     <input id="token" type="password" placeholder="粘贴服务器 .env 中的 APP_TOKEN" autocomplete="off" aria-label="APP_TOKEN">
@@ -67,9 +67,9 @@
 <script>
 (() => {
   'use strict';
-  const host = location.hostname;
-  // The two ports are intentionally accessible only through SSH forwarding.
-  document.getElementById('remoteBrowser').src = `${location.protocol}//${host}:6080/vnc.html?autoconnect=1&resize=scale&path=websockify`;
+  // Same-origin through nginx: the external host exposes only HTTPS port 8000.
+  // The internal noVNC port 6080 is never published externally.
+  document.getElementById('remoteBrowser').src = '/novnc/vnc.html?autoconnect=1&resize=scale&path=websockify';
   const $ = id => document.getElementById(id);
   const message = text => { $('message').textContent = text; };
   const show = data => { $('results').textContent = JSON.stringify(data, null, 2); };
