@@ -3,100 +3,163 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Luma 远程登录授权 Demo</title>
+  <title>Luma 远程浏览器授权 Demo</title>
   <style>
     :root { color-scheme: light; font-family: system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
     body { margin: 0; color: #263247; background: #f4f7fb; }
-    .shell { max-width: 1360px; margin: 0 auto; padding: 20px; }
-    header { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-    h1 { font-size: 23px; margin: 6px 0; }
-    p { line-height: 1.6; margin: 6px 0 14px; }
-    .subtle { color: #627086; font-size: 13px; }
-    .panel { background: white; border: 1px solid #dfe6f0; border-radius: 12px; padding: 16px; box-shadow: 0 2px 10px #14203d07; }
-    .toolbar { margin: 14px 0; display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
-    input[type=password] { width: 320px; max-width: 95%; border: 1px solid #cbd5e1; padding: 11px; border-radius: 8px; }
-    button { background: #2d59af; color: white; border: none; border-radius: 8px; padding: 10px 14px; font-weight: 600; cursor: pointer; }
-    button.secondary { background: #64748b; }
-    button.danger { background: #b33939; }
-    button:hover { filter: brightness(.93); }
-    button:disabled { opacity: .6; cursor: not-allowed; }
-    .cols { display: grid; grid-template-columns: minmax(580px, 2.1fr) minmax(260px, .9fr); gap: 14px; }
-    iframe { display: block; width: 100%; height: min(76vh, 780px); min-height: 540px; border: 1px solid #dce3ed; border-radius: 8px; background: #222; }
-    .status { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace,SFMono-Regular,Consolas,monospace; background: #f3f6fc; border-radius: 8px; font-size: 12px; padding: 12px; }
-    label { display: block; margin-bottom: 12px; line-height: 1.6; }
-    #message { margin-bottom: 10px; color: #35577a; min-height: 2em; overflow-wrap: anywhere; }
-    .notice { padding: 10px 12px; border-left: 4px solid #e0a03a; background: #fff8eb; font-size: 13px; }
-    @media(max-width: 950px){ .cols { grid-template-columns: 1fr; } iframe { height: 60vh; min-height: 420px; } }
+    .shell { max-width: 1400px; margin: auto; padding: 20px; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+    h1 { font-size:23px; margin:6px 0; }
+    h2 { font-size:17px; margin: 0 0 12px; }
+    p { line-height:1.6; margin:6px 0 14px; }
+    .muted { color:#65748b; font-size:13px; }
+    .panel { background:#fff; border:1px solid #dfe6f0; border-radius:12px; padding:16px; box-shadow:0 2px 10px #14203d07; }
+    .toolbar { margin:14px 0; display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    input[type=password] { min-width:290px; max-width:95%; border:1px solid #cbd5e1; border-radius:8px; padding:11px; }
+    button { color:#fff; border:0; border-radius:8px; background:#2d59af; padding:10px 14px; font-weight:600; cursor:pointer; }
+    button.secondary { background:#64748b; }
+    button.danger { background:#b33939; }
+    button:disabled { opacity:.55; cursor:not-allowed; }
+    button:hover { filter:brightness(.93); }
+    .cols { display:grid; grid-template-columns:minmax(550px,2.1fr) minmax(290px,.9fr); gap:14px; }
+    iframe { display:block; width:100%; height:min(74vh,780px); min-height:510px; border:1px solid #dce3ed; border-radius:8px; background:#222; }
+    .locked { min-height:480px; background:#eef2f7; border:1px dashed #c3d0df; border-radius:8px; display:flex; align-items:center; justify-content:center; color:#536276; }
+    .status { white-space:pre-wrap; overflow-wrap:anywhere; font:12px ui-monospace,SFMono-Regular,Consolas,monospace; background:#f3f6fc; border-radius:8px; padding:12px; }
+    label { display:block; margin-bottom:12px; line-height:1.6; }
+    #message { color:#35577a; min-height:2em; margin:12px 0; }
+    .notice { padding:10px 12px; border-left:4px solid #e0a03a; background:#fff8eb; font-size:13px; }
+    [hidden] { display:none !important; }
+    @media(max-width:950px) { .cols {grid-template-columns:1fr;} iframe {height:60vh; min-height:420px;} }
   </style>
 </head>
 <body>
 <main class="shell">
   <header>
     <div>
-      <h1>Luma 登录授权 · Linux 远程浏览器 Demo</h1>
-      <p class="subtle">真实浏览器运行在 Linux 容器内。请只用你本人拥有或获得明确授权的 Luma 账号测试。</p>
+      <h1>Luma 登录授权 · Linux 远程浏览器</h1>
+      <p class="muted">boat.dev HTTPS 单入口版。不弹出浏览器用户名/密码框。仅限单操作员测试。</p>
     </div>
-    <span class="subtle">仅限已获授权的单操作员测试（非多用户产品）</span>
+    <span class="muted" id="lockState">检测登录状态中…</span>
   </header>
-  <div class="toolbar panel">
-    <input id="token" type="password" placeholder="粘贴服务器 .env 中的 APP_TOKEN" autocomplete="off" aria-label="APP_TOKEN">
+  <section id="loginBar" class="panel toolbar">
+    <input type="password" id="token" placeholder="输入 .env 中的 APP_TOKEN（只需一次）" autocomplete="off" aria-label="APP_TOKEN">
+    <button type="button" id="unlockBtn">解锁远程浏览器</button>
+    <span class="muted">这是网页内授权，不是浏览器弹窗；Token 不会保存到本地存储。</span>
+  </section>
+  <section id="actions" class="panel toolbar" hidden>
     <button type="button" id="statusBtn">查看状态</button>
     <button type="button" class="secondary" id="verifyBtn">验证已保存会话</button>
     <button type="button" class="danger" id="disconnectBtn">删除本地授权 / 清空浏览器</button>
-  </div>
+    <button type="button" class="secondary" id="logoutBtn">退出本 Demo</button>
+  </section>
   <div class="cols">
     <section class="panel">
-      <h2 style="font-size:17px;margin-top:0">① 在下方远程浏览器中登录 Luma</h2>
-      <p class="subtle">推荐邮箱验证码方式。所有输入发生在 Luma 网站页面，而不是这个 Demo 的表单里。</p>
-      <iframe id="remoteBrowser" title="Linux remote Chromium browser" referrerpolicy="no-referrer"></iframe>
+      <h2>① 在远程 Chromium 登录 Luma</h2>
+      <p class="muted">输入邮箱和验证码均在 Luma 网站中完成，不是输入到 Demo 管理表单。</p>
+      <div id="lockedBox" class="locked">请先在上方输入 APP_TOKEN 解锁</div>
+      <iframe id="remoteBrowser" title="Linux remote Chromium browser" referrerpolicy="no-referrer" hidden></iframe>
     </section>
     <aside class="panel">
-      <h2 style="font-size:17px;margin-top:0">② 确认授权并保存</h2>
-      <p>完成登录后，确认浏览器已进入 Luma 登录后页面。我们仅保存 <strong>luma.com</strong> 域名范围的会话状态，加密写入本机，不在 API 返回 Cookie。</p>
-      <label><input id="consent" type="checkbox"> 我确认自己拥有此账号或已获授权，并同意将当前登录会话保存到这个 Linux 演示服务器供后续访问测试。</label>
-      <button type="button" id="saveBtn">保存加密登录会话</button>
-      <h2 style="font-size:17px;margin-top:24px">③ 状态和验证结果</h2>
-      <div id="message" aria-live="polite">请输入 APP_TOKEN，然后点击「查看状态」。</div>
-      <div id="results" class="status">尚未检查</div>
-      <div class="notice" style="margin-top:20px">
-        <strong>实验限制：</strong> 访问 /home、看到 Cookie 或未看到“Sign In”按钮，都不能单独作为登录成功的确定证据。最后请人工核对页面是否真的展示登录用户信息。
-      </div>
+      <h2>② 授权并保存</h2>
+      <p>完成登录、确认展示了你的 Luma 账号页面后，可将 <strong>luma.com</strong> 范围的浏览器状态加密保存到容器挂载的数据卷。</p>
+      <label><input type="checkbox" id="consent"> 我确认这是我自己的账号或已获得明确授权，并同意保存当前登录会话用于后续抓取测试。</label>
+      <button type="button" id="saveBtn" disabled>保存加密登录会话</button>
+      <h2 style="margin-top:24px">③ 运行结果</h2>
+      <div id="message" aria-live="polite">等待解锁。</div>
+      <div class="status" id="results">尚未检查</div>
+      <div class="notice" style="margin-top:16px">提示：Cookie 存在、访问 /home 返回 200 都不能单独证明 Luma 登录成功。请核对远程浏览器实际展示的账号信息。</div>
     </aside>
   </div>
 </main>
 <script>
 (() => {
   'use strict';
-  // Same-origin through nginx: the external host exposes only HTTPS port 8000.
-  // The internal noVNC port 6080 is never published externally.
-  document.getElementById('remoteBrowser').src = '/novnc/vnc.html?autoconnect=1&resize=scale&path=websockify';
   const $ = id => document.getElementById(id);
-  const message = text => { $('message').textContent = text; };
   const show = data => { $('results').textContent = JSON.stringify(data, null, 2); };
-  async function api(path, method='GET') {
-    const token = $('token').value.trim();
-    if (!token) throw new Error('请先填写 APP_TOKEN（在服务器 .env 文件内）。');
-    const response = await fetch(path, { method, headers: { 'X-Admin-Token': token }, cache: 'no-store' });
+  const message = text => { $('message').textContent = text; };
+  let authenticated = false;
+
+  function showAuthenticated(isAuthenticated) {
+    authenticated = isAuthenticated;
+    $('loginBar').hidden = isAuthenticated;
+    $('actions').hidden = !isAuthenticated;
+    $('saveBtn').disabled = !isAuthenticated;
+    $('lockState').textContent = isAuthenticated ? '已解锁 · 远程浏览器已受保护' : '未解锁';
+    $('lockedBox').hidden = isAuthenticated;
+    $('remoteBrowser').hidden = !isAuthenticated;
+    if (isAuthenticated) {
+      // Critical: noVNC constructs ws(s)://HOST/PATH. It must include "novnc/"
+      // because Nginx forwards /novnc/ to port 6080.
+      if (!$('remoteBrowser').src || $('remoteBrowser').src === 'about:blank') {
+        $('remoteBrowser').src = '/novnc/vnc.html?autoconnect=1&resize=scale&path=novnc%2Fwebsockify';
+      }
+    } else {
+      $('remoteBrowser').src = 'about:blank';
+    }
+  }
+
+  async function api(path, method='GET', data=null) {
+    const options = { method, cache:'no-store', credentials:'same-origin' };
+    if (data !== null) {
+      options.headers = { 'Content-Type':'application/json' };
+      options.body = JSON.stringify(data);
+    }
+    const response = await fetch(path, options);
     let body = {};
     try { body = await response.json(); } catch (_) {}
-    if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
+    if (!response.ok) {
+      if (response.status === 401 && path !== '/api/login') showAuthenticated(false);
+      throw new Error(body.detail || `HTTP ${response.status}`);
+    }
     return body;
   }
+
+  async function unlock() {
+    const token = $('token').value.trim();
+    if (!token) { message('请先输入 APP_TOKEN。'); return; }
+    $('unlockBtn').disabled = true;
+    try {
+      await api('/api/login', 'POST', {token});
+      $('token').value = '';
+      showAuthenticated(true);
+      message('解锁成功。现在可以操作远程浏览器登录 Luma。');
+      show(await api('/api/status'));
+    } catch (e) { message(`解锁失败：${e.message}`); }
+    finally { $('unlockBtn').disabled = false; }
+  }
+
   async function execute(path, method='GET') {
-    message('正在请求…');
-    try { const data = await api(path, method); show(data); message('操作完成。'); }
+    message('正在处理…');
+    try { show(await api(path,method)); message('操作完成。'); }
     catch (e) { message(`错误：${e.message}`); }
   }
+
+  $('unlockBtn').addEventListener('click', unlock);
+  $('token').addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
   $('statusBtn').addEventListener('click', () => execute('/api/status'));
   $('verifyBtn').addEventListener('click', () => execute('/api/verify', 'POST'));
   $('saveBtn').addEventListener('click', () => {
-    if (!$('consent').checked) { message('请先确认账号所有权和授权范围。'); return; }
+    if (!$('consent').checked) return message('请先勾选账号授权确认。');
     execute('/api/save', 'POST');
   });
   $('disconnectBtn').addEventListener('click', () => {
-    if (confirm('确认删除本机保存的 Luma 会话并清空远程浏览器吗？注意，这不会撤销 Luma 网站端会话。'))
-      execute('/api/disconnect', 'POST');
+    if (confirm('确认删除本地加密会话并清空浏览器？这不会撤销 Luma 服务器端会话。')) execute('/api/disconnect','POST');
   });
+  $('logoutBtn').addEventListener('click', async () => {
+    try {
+      await api('/api/logout', 'POST');
+      showAuthenticated(false);
+      message('已退出本 Demo。再次操作需要输入 APP_TOKEN。');
+      show({authenticated:false});
+    } catch (e) { message(`退出失败：${e.message}`); }
+  });
+  (async () => {
+    try {
+      const data = await api('/api/me');
+      showAuthenticated(data.authenticated);
+      message(data.authenticated ? '已恢复管理登录状态。' : '请先输入 APP_TOKEN 解锁。');
+    } catch (e) { message(`初始化失败：${e.message}`); showAuthenticated(false); }
+  })();
 })();
 </script>
 </body>

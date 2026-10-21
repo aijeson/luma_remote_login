@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    chromium xvfb x11vnc novnc websockify nginx apache2-utils \
+    chromium xvfb x11vnc novnc websockify nginx \
     ca-certificates fonts-liberation fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 

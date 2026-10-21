@@ -1,14 +1,24 @@
-"""Single-operator demo. Do NOT expose ports directly to the internet."""
+"""Single-operator Luma remote-browser demo with in-page authentication.
+
+No HTTP Basic Auth. A short-lived, HttpOnly, Secure, SameSite=Strict cookie
+is issued after the operator supplies APP_TOKEN inside the app page.
+Nginx auth_request validates it before serving noVNC or upgrading WebSockets.
+
+IMPORTANT: this is NOT a multi-user system. There is one shared Chromium.
+"""
 import asyncio
+import hashlib
 import logging
 import os
 import secrets
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from playwright.async_api import async_playwright
 
 from session_store import (
@@ -19,14 +29,15 @@ from session_store import (
 LOGIN_URL = 'https://luma.com/signin?next=%2Fhome'
 HOME_URL = 'https://luma.com/home'
 CHROMIUM = '/usr/bin/chromium'
+COOKIE_NAME = 'luma_demo_session'
+SESSION_TTL_SECONDS = 8 * 60 * 60
 logger = logging.getLogger('luma-demo')
 logging.basicConfig(level=logging.INFO)
 
 
 async def fresh_context(browser):
     context = await browser.new_context(
-        viewport={'width': 1320, 'height': 700},
-        locale='en-US',
+        viewport={'width': 1320, 'height': 700}, locale='en-US',
     )
     page = await context.new_page()
     await page.goto(LOGIN_URL, wait_until='domcontentloaded', timeout=60000)
@@ -36,15 +47,13 @@ async def fresh_context(browser):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not os.environ.get('APP_TOKEN') or not os.environ.get('FERNET_KEY'):
-        raise RuntimeError('APP_TOKEN and FERNET_KEY are both required.')
-    # Validate key early; do not show the key in logs.
+        raise RuntimeError('APP_TOKEN and FERNET_KEY are required.')
     from cryptography.fernet import Fernet
     Fernet(os.environ['FERNET_KEY'].encode())
     app.state.lock = asyncio.Lock()
     app.state.pw = await async_playwright().start()
     app.state.browser = await app.state.pw.chromium.launch(
-        executable_path=CHROMIUM,
-        headless=False,
+        executable_path=CHROMIUM, headless=False,
         args=['--no-sandbox', '--disable-dev-shm-usage', '--window-size=1360,760'],
     )
     try:
@@ -52,7 +61,6 @@ async def lifespan(app: FastAPI):
         logger.info('Luma sign-in page is ready in the virtual browser.')
     except Exception:
         logger.exception('Could not open Luma sign-in page; check network connectivity.')
-        # Let /health and /api/status still work and report failure.
         app.state.context = await app.state.browser.new_context()
         app.state.page = await app.state.context.new_page()
     try:
@@ -63,12 +71,41 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title='Luma remote sign-in demo', lifespan=lifespan)
+# One Uvicorn process, in-memory sessions. Restart logs operators out.
+app.state.admin_sessions = {}
 
 
-def require_token(x_admin_token: str = Header(default='')):
-    expected = os.environ.get('APP_TOKEN', '')
-    if not expected or not secrets.compare_digest(x_admin_token, expected):
-        raise HTTPException(status_code=401, detail='APP_TOKEN is missing or incorrect')
+class LoginRequest(BaseModel):
+    token: str
+
+
+def ensure_same_origin(request: Request):
+    """Reject cross-site POSTs even if a browser disregards SameSite."""
+    origin = request.headers.get('origin', '')
+    host = request.headers.get('host', '')
+    parsed = urlsplit(origin)
+    if not origin or not host or parsed.scheme not in ('https', 'http') or parsed.netloc.lower() != host.lower():
+        raise HTTPException(status_code=403, detail='Request origin not allowed.')
+
+
+def valid_session(request: Request) -> bool:
+    sid = request.cookies.get(COOKIE_NAME, '')
+    if not sid or len(sid) > 256:
+        return False
+    digest = hashlib.sha256(sid.encode('ascii', 'ignore')).hexdigest()
+    expires = app.state.admin_sessions.get(digest, 0)
+    if not expires:
+        return False
+    if expires <= time.monotonic():
+        app.state.admin_sessions.pop(digest, None)
+        return False
+    return True
+
+
+def require_session(request: Request):
+    if not valid_session(request):
+        # IMPORTANT: no WWW-Authenticate header => no browser Basic Auth popup.
+        raise HTTPException(status_code=401, detail='请先在本页面输入 APP_TOKEN 解锁。')
 
 
 @app.get('/')
@@ -81,7 +118,48 @@ async def health():
     return {'status': 'up'}
 
 
-@app.get('/api/status', dependencies=[Depends(require_token)])
+@app.get('/api/me')
+async def me(request: Request):
+    return {'authenticated': valid_session(request)}
+
+
+@app.post('/api/login')
+async def login(body: LoginRequest, request: Request, response: Response):
+    ensure_same_origin(request)
+    expected = os.environ.get('APP_TOKEN', '')
+    if not expected or not secrets.compare_digest(body.token, expected):
+        await asyncio.sleep(0.3)
+        raise HTTPException(status_code=401, detail='APP_TOKEN 不正确。')
+    session_id = secrets.token_urlsafe(32)
+    digest = hashlib.sha256(session_id.encode()).hexdigest()
+    app.state.admin_sessions[digest] = time.monotonic() + SESSION_TTL_SECONDS
+    # Only available over HTTPS (boat.dev provides TLS at the public endpoint).
+    response.set_cookie(
+        key=COOKIE_NAME, value=session_id, max_age=SESSION_TTL_SECONDS,
+        httponly=True, secure=True, samesite='strict', path='/',
+    )
+    return {'authenticated': True, 'expires_in_seconds': SESSION_TTL_SECONDS}
+
+
+@app.post('/api/logout')
+async def logout(request: Request, response: Response):
+    ensure_same_origin(request)
+    sid = request.cookies.get(COOKIE_NAME, '')
+    if sid:
+        digest = hashlib.sha256(sid.encode('ascii', 'ignore')).hexdigest()
+        app.state.admin_sessions.pop(digest, None)
+    response.delete_cookie(key=COOKIE_NAME, path='/', secure=True, httponly=True, samesite='strict')
+    return {'authenticated': False}
+
+
+@app.get('/internal/auth-check')
+async def auth_check(request: Request):
+    if not valid_session(request):
+        raise HTTPException(status_code=401, detail='Unauthorized')
+    return Response(status_code=204)
+
+
+@app.get('/api/status', dependencies=[Depends(require_session)])
 async def status():
     page = app.state.page
     url = page.url
@@ -99,19 +177,20 @@ async def status():
         'page_title': title,
         'luma_cookie_count': count,
         'saved_session_exists': STATE_FILE.exists(),
-        'note': 'Cookie count and URL cannot on their own prove authentication.'
+        'note': 'Cookie count and URL cannot on their own prove authentication.',
     }
 
 
-@app.post('/api/save', dependencies=[Depends(require_token)])
-async def save_state():
+@app.post('/api/save', dependencies=[Depends(require_session)])
+async def save_state(request: Request):
+    ensure_same_origin(request)
     async with app.state.lock:
         page_url = app.state.page.url
         url = urlsplit(page_url)
         if not is_luma_host(url.hostname) or url.path.startswith('/signin'):
             raise HTTPException(
                 status_code=400,
-                detail='Please finish signing in and return to a Luma page before saving.'
+                detail='Please finish signing in and return to a Luma page before saving.',
             )
         raw_state = await app.state.context.storage_state(indexed_db=True)
         filtered = filter_luma_state(raw_state)
@@ -122,12 +201,12 @@ async def save_state():
             'saved': True,
             'luma_cookie_count': len(filtered['cookies']),
             'luma_origin_count': len(filtered['origins']),
-            'message': 'Encrypted state saved locally. Check with /api/verify or worker.py.'
+            'message': 'Encrypted state saved locally. Check with /api/verify or worker.py.',
         }
 
 
 async def run_probe(browser):
-    """A heuristic, not an assertion that protected data is accessible."""
+    """A smoke test; not definitive evidence of Luma authentication."""
     state = load_encrypted()
     context = await browser.new_context(storage_state=state)
     try:
@@ -145,20 +224,19 @@ async def run_probe(browser):
             'http_status': response.status if response else None,
             'sign_in_link_visible': visible,
             'result': (
-                'Probably not signed in (redirected to sign-in page)'
-                if login_redirect else
-                'Sign-in link visible; login not confirmed'
-                if visible else
+                'Probably not signed in (redirected to sign-in page)' if login_redirect else
+                'Sign-in link visible; login not confirmed' if visible else
                 'No sign-in link found; appears signed in, verify manually'
             ),
-            'important': 'The public /home page may be accessible without signing in. This is only a heuristic.'
+            'important': 'The public /home page may be accessible without signing in. This is only a heuristic.',
         }
     finally:
         await context.close()
 
 
-@app.post('/api/verify', dependencies=[Depends(require_token)])
-async def verify_state():
+@app.post('/api/verify', dependencies=[Depends(require_session)])
+async def verify_state(request: Request):
+    ensure_same_origin(request)
     if not STATE_FILE.exists():
         raise HTTPException(status_code=404, detail='No encrypted session saved yet.')
     async with app.state.lock:
@@ -169,8 +247,9 @@ async def verify_state():
             raise HTTPException(status_code=502, detail='Verification failed. Check server logs.')
 
 
-@app.post('/api/disconnect', dependencies=[Depends(require_token)])
-async def disconnect():
+@app.post('/api/disconnect', dependencies=[Depends(require_session)])
+async def disconnect(request: Request):
+    ensure_same_origin(request)
     async with app.state.lock:
         delete_local_state()
         await app.state.context.close()
@@ -182,5 +261,5 @@ async def disconnect():
             app.state.page = await app.state.context.new_page()
         return {
             'deleted_local_session': True,
-            'message': 'Local state deleted and demo browser cleared. This does NOT revoke the Luma-side session.'
+            'message': 'Local state deleted and demo browser cleared. This does NOT revoke the Luma-side session.',
         }
